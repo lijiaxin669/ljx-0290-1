@@ -349,4 +349,235 @@ describe('conflictDetector', () => {
       expect(venueConflict?.severity).toBe('error')
     })
   })
+
+  describe('transport window boundary tests', () => {
+    const transportInstruments: Instrument[] = [
+      { id: 'inst1', name: '架子鼓', requiresTransport: true },
+      { id: 'inst2', name: '三角钢琴', requiresTransport: true },
+      { id: 'inst3', name: '电吉他', requiresTransport: false }
+    ]
+
+    const createShowWithTransport = (id: string, startTime: string, instrumentIds: string[]): Show => ({
+      id,
+      tourSeasonId: 'tour1',
+      city: '城市' + id,
+      venueId: 'venue1',
+      venueName: '场馆1',
+      startTime,
+      durationMinutes: 120,
+      musicianIds: ['musician1'],
+      instrumentIds
+    })
+
+    it('两场合共享 requiresTransport 乐器，间隔 5.9 小时应报警', () => {
+      const showA = createShowWithTransport('showA', '2024-06-20T19:30:00', ['inst1', 'inst3'])
+      const showB = createShowWithTransport('showB', '2024-06-21T03:24:00', ['inst1', 'inst2'])
+
+      const conflicts = checkTransportWindow(showA, [showB], transportInstruments)
+
+      expect(conflicts).toHaveLength(1)
+      expect(conflicts[0].type).toBe('transport_window')
+      expect(conflicts[0].severity).toBe('warning')
+      expect(conflicts[0].message).toContain('5.9')
+      expect(conflicts[0].details).toContain('1件大型乐器')
+    })
+
+    it('两场合共享 requiresTransport 乐器，间隔恰好 6.0 小时不报警', () => {
+      const showA = createShowWithTransport('showA', '2024-06-20T19:30:00', ['inst1'])
+      const showB = createShowWithTransport('showB', '2024-06-21T03:30:00', ['inst1'])
+
+      const conflicts = checkTransportWindow(showA, [showB], transportInstruments)
+
+      expect(conflicts).toHaveLength(0)
+    })
+
+    it('两场合共享 requiresTransport 乐器，间隔 6.1 小时不报警', () => {
+      const showA = createShowWithTransport('showA', '2024-06-20T19:30:00', ['inst1'])
+      const showB = createShowWithTransport('showB', '2024-06-21T03:36:00', ['inst1'])
+
+      const conflicts = checkTransportWindow(showA, [showB], transportInstruments)
+
+      expect(conflicts).toHaveLength(0)
+    })
+
+    it('两场合无共享 requiresTransport 乐器，间隔 1 小时不报警', () => {
+      const showA = createShowWithTransport('showA', '2024-06-20T19:30:00', ['inst1'])
+      const showB = createShowWithTransport('showB', '2024-06-20T22:30:00', ['inst2'])
+
+      const conflicts = checkTransportWindow(showA, [showB], transportInstruments)
+
+      expect(conflicts).toHaveLength(0)
+    })
+
+    it('两场合共享非运输乐器（requiresTransport=false），间隔 1 小时不报警', () => {
+      const showA = createShowWithTransport('showA', '2024-06-20T19:30:00', ['inst3'])
+      const showB = createShowWithTransport('showB', '2024-06-20T22:30:00', ['inst3'])
+
+      const conflicts = checkTransportWindow(showA, [showB], transportInstruments)
+
+      expect(conflicts).toHaveLength(0)
+    })
+
+    it('多场合共享运输乐器，应分别检测间隔', () => {
+      const showMain = createShowWithTransport('main', '2024-06-20T19:30:00', ['inst1'])
+      const showClose = createShowWithTransport('close', '2024-06-20T23:00:00', ['inst1'])
+      const showFar = createShowWithTransport('far', '2024-06-21T08:00:00', ['inst1'])
+
+      const conflicts = checkTransportWindow(showMain, [showClose, showFar], transportInstruments)
+
+      expect(conflicts).toHaveLength(1)
+      expect(conflicts[0].relatedShowId).toBe('close')
+    })
+  })
+
+  describe('跨日午夜场与场馆 unavailableDates 校验', () => {
+    const midnightVenues: Venue[] = [
+      {
+        id: 'venue_shenzhen',
+        name: '深圳湾体育中心',
+        city: '深圳',
+        unavailableDates: ['2024-06-21']
+      }
+    ]
+
+    it('跨日午夜场（凌晨 02:00）应匹配当日 unavailableDates', () => {
+      const midnightShow: Show = {
+        id: 'show_midnight',
+        tourSeasonId: 'tour1',
+        city: '深圳',
+        venueId: 'venue_shenzhen',
+        venueName: '深圳湾体育中心',
+        startTime: '2024-06-21T02:00:00',
+        durationMinutes: 120,
+        musicianIds: ['musician1'],
+        instrumentIds: ['instrument1']
+      }
+
+      const conflicts = checkVenueAvailability(midnightShow, midnightVenues)
+
+      expect(conflicts).toHaveLength(1)
+      expect(conflicts[0].type).toBe('venue_unavailable')
+      expect(conflicts[0].message).toContain('2024-06-21')
+    })
+
+    it('凌晨 00:00 应匹配当日 unavailableDates', () => {
+      const midnightShow: Show = {
+        id: 'show_zero',
+        tourSeasonId: 'tour1',
+        city: '深圳',
+        venueId: 'venue_shenzhen',
+        venueName: '深圳湾体育中心',
+        startTime: '2024-06-21T00:00:00',
+        durationMinutes: 120,
+        musicianIds: ['musician1'],
+        instrumentIds: ['instrument1']
+      }
+
+      const conflicts = checkVenueAvailability(midnightShow, midnightVenues)
+
+      expect(conflicts).toHaveLength(1)
+      expect(conflicts[0].message).toContain('2024-06-21')
+    })
+
+    it('前一天 23:59 应匹配前一日 unavailableDates', () => {
+      const lateNightShow: Show = {
+        id: 'show_late',
+        tourSeasonId: 'tour1',
+        city: '深圳',
+        venueId: 'venue_shenzhen',
+        venueName: '深圳湾体育中心',
+        startTime: '2024-06-20T23:59:00',
+        durationMinutes: 120,
+        musicianIds: ['musician1'],
+        instrumentIds: ['instrument1']
+      }
+
+      const conflicts = checkVenueAvailability(lateNightShow, midnightVenues)
+
+      expect(conflicts).toHaveLength(0)
+    })
+
+    it('show4 凌晨档与场馆 unavailableDates 同日校验（模拟真实场景）', () => {
+      const show4: Show = {
+        id: 'show4',
+        tourSeasonId: 'tour1',
+        city: '深圳',
+        venueId: 'venue_shenzhen',
+        venueName: '深圳湾体育中心',
+        startTime: '2024-06-21T02:00:00',
+        durationMinutes: 120,
+        musicianIds: ['musician1', 'musician2', 'musician3', 'musician5'],
+        instrumentIds: ['instrument1', 'instrument2', 'instrument3', 'instrument4']
+      }
+
+      const show3: Show = {
+        id: 'show3',
+        tourSeasonId: 'tour1',
+        city: '广州',
+        venueId: 'venue_guangzhou',
+        venueName: '广州天河体育馆',
+        startTime: '2024-06-20T19:30:00',
+        durationMinutes: 120,
+        musicianIds: ['musician1', 'musician2', 'musician3', 'musician5'],
+        instrumentIds: ['instrument1', 'instrument2', 'instrument3', 'instrument4']
+      }
+
+      const allInstruments: Instrument[] = [
+        { id: 'instrument1', name: '架子鼓', requiresTransport: true },
+        { id: 'instrument2', name: '低音提琴', requiresTransport: true },
+        { id: 'instrument3', name: '三角钢琴', requiresTransport: true },
+        { id: 'instrument4', name: '电吉他', requiresTransport: false }
+      ]
+
+      const allVenues: Venue[] = [
+        ...midnightVenues,
+        {
+          id: 'venue_guangzhou',
+          name: '广州天河体育馆',
+          city: '广州',
+          unavailableDates: []
+        }
+      ]
+
+      const conflicts = detectConflicts(show4, [show3, show4], allVenues, allInstruments)
+
+      const venueConflict = conflicts.find(c => c.type === 'venue_unavailable')
+      expect(venueConflict).toBeDefined()
+      expect(venueConflict?.severity).toBe('error')
+
+      const transportConflict = conflicts.find(c => c.type === 'transport_window')
+      expect(transportConflict).toBeDefined()
+      expect(transportConflict?.severity).toBe('warning')
+      expect(transportConflict?.message).toContain('4.5')
+
+      const musicianConflict = conflicts.find(c => c.type === 'musician_overlap')
+      expect(musicianConflict).toBeUndefined()
+    })
+  })
+
+  describe('detectAllConflicts 双向检测', () => {
+    it('乐手撞档应双向检测（show1 vs show2 和 show2 vs show1）', () => {
+      const show1: Show = {
+        ...baseShow,
+        id: 'show1'
+      }
+      const show2: Show = {
+        ...baseShow,
+        id: 'show2',
+        city: '上海',
+        startTime: '2024-06-15T20:00:00'
+      }
+
+      const conflictMap = detectAllConflicts([show1, show2], [], testInstruments)
+
+      expect(conflictMap.has('show1')).toBe(true)
+      expect(conflictMap.has('show2')).toBe(true)
+
+      const show1Conflicts = conflictMap.get('show1') || []
+      const show2Conflicts = conflictMap.get('show2') || []
+
+      expect(show1Conflicts.find(c => c.type === 'musician_overlap')).toBeDefined()
+      expect(show2Conflicts.find(c => c.type === 'musician_overlap')).toBeDefined()
+    })
+  })
 })

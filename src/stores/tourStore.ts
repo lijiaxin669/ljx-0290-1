@@ -394,6 +394,7 @@ export const useTourStore = defineStore('tour', () => {
     expandedCities,
     viewMode,
     viewStartDate,
+    resolvedConflictKeys,
     selectedTourSeason,
     showsByCity,
     cities,
@@ -416,6 +417,7 @@ export const useTourStore = defineStore('tour', () => {
     navigateView,
     ensureDateInView,
     markConflictResolved,
+    getConflictKey,
     getSuggestionsForShowAction
   }
 })
