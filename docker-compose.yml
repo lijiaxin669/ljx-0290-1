@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  tour-scheduler:
+    build: .
+    container_name: tour-scheduler
+    ports:
+      - "8080:80"
+    restart: unless-stopped
